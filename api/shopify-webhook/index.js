@@ -7,6 +7,17 @@ export default async function handler(req, res) {
 
   const body = req.body;
 
+  // Normalize and split tags
+  const tags = (body.tags || '').split(',').map(tag => tag.trim());
+
+  // Exclude recurring subscription orders
+  const isRecurringSubscription = tags.includes('Subscription') && tags.includes('Subscription Recurring Order');
+  if (isRecurringSubscription) {
+    console.log('Recurring subscription - event not sent:', tags);
+    return res.status(200).json({ success: false, message: 'Recurring subscription - event skipped' });
+  }
+
+  // Construct payload
   const payload = {
     data: [
       {
