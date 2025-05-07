@@ -7,13 +7,14 @@ export default async function handler(req, res) {
 
   const body = req.body;
 
-  // ⛔️ Filter out Recurring Subscription Orders
-  const tags = body.tags || '';
-  if (tags.includes('Subscription Recurring Order')) {
+  // Robust filtering for recurring subscription orders
+  const tagsArray = (body.tags || '').split(',').map(tag => tag.trim());
+  if (tagsArray.includes('Subscription Recurring Order')) {
+    console.log(`Skipped recurring order ${body.id}`);
     return res.status(200).json({ success: false, message: 'Recurring order ignored' });
   }
 
-  // ✅ Extract fbp and fbc from note_attributes (safe + recommended)
+  // Extract fbp and fbc from note_attributes
   let fbp = null;
   let fbc = null;
 
@@ -30,7 +31,7 @@ export default async function handler(req, res) {
         event_name: 'Aimerce_Target',
         event_time: Math.floor(new Date(body.created_at).getTime() / 1000),
         action_source: 'website',
-        event_source_url: null, // Deliberately blank to avoid sending URL or product info
+        event_source_url: null,
         user_data: {
           em: [body.email ? crypto.createHash('sha256').update(body.email.trim().toLowerCase()).digest('hex') : null],
           client_ip_address: body.browser_ip || req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '0.0.0.0',
@@ -64,6 +65,7 @@ export default async function handler(req, res) {
       return res.status(500).json({ success: false, error: result });
     }
 
+    console.log(`Event sent for order ${body.id}`, result);
     return res.status(200).json({ success: true, result });
   } catch (error) {
     console.error('Fetch error:', error);
