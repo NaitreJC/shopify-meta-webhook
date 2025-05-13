@@ -22,7 +22,7 @@ export default async function handler(req, res) {
     return res.status(200).json({ success: false, message: 'Recurring order ignored' });
   }
 
-  // ✅ Extract fbp and fbc from note_attributes (if they exist)
+  // ✅ Try to extract fbp and fbc from note_attributes
   let fbp = null;
   let fbc = null;
 
@@ -30,6 +30,24 @@ export default async function handler(req, res) {
     for (const item of body.note_attributes) {
       if (item.name === '_fbp') fbp = item.value;
       if (item.name === '_fbc') fbc = item.value;
+    }
+  }
+
+  // 🔁 If missing, try looking up from proxy store
+  if (!fbp || !fbc) {
+    const lookupKey = body.cart_token || body.browser_ip;
+    try {
+      const proxyRes = await fetch(`${process.env.PROXY_COOKIE_LOOKUP_URL}?key=${lookupKey}`);
+      if (proxyRes.ok) {
+        const proxyData = await proxyRes.json();
+        fbp = fbp || proxyData.fbp;
+        fbc = fbc || proxyData.fbc;
+        console.log("📡 Enriched cookies from proxy:", { fbp, fbc });
+      } else {
+        console.warn('⚠️ Failed to enrich cookies from proxy');
+      }
+    } catch (err) {
+      console.error('❌ Proxy cookie fetch error:', err.message);
     }
   }
 
