@@ -58,7 +58,7 @@ export default async function handler(req, res) {
         event_name: 'Aimerce_Target',
         event_time: Math.floor(new Date(body.created_at).getTime() / 1000),
         action_source: 'website',
-        event_source_url: null, // Never include product URLs or names
+        event_source_url: 'https://events.naitre.com',
         user_data: {
           em: [body.email ? crypto.createHash('sha256').update(body.email.trim().toLowerCase()).digest('hex') : null],
           client_ip_address: body.browser_ip || req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '0.0.0.0',
