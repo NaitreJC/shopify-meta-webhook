@@ -4,6 +4,21 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).send('Method Not Allowed');
   }
+// --- Shopify HMAC (report-only, SAFE) ---
+try {
+  const raw = JSON.stringify(req.body); // using parsed body for now (preview mode)
+  const hmacHeader = req.headers['x-shopify-hmac-sha256'];
+  const digest = crypto
+    .createHmac('sha256', process.env.SHOPIFY_WEBHOOK_SECRET)
+    .update(raw, 'utf8')
+    .digest('base64');
+  if (digest !== hmacHeader) {
+    console.warn('⚠️ HMAC mismatch (report-only, not blocking)');
+  }
+} catch (e) {
+  console.warn('⚠️ HMAC verify skipped:', e.message);
+}
+// ----------------------------------------
 
   const body = req.body;
 
