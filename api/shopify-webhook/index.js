@@ -27,12 +27,26 @@ export default async function handler(req, res) {
 
   const body = req.body;
 
-  console.log('🚚 Order received:', body.id);
-  console.log('🏷️ Tags:', body.tags);
-  console.log('🪪 Source Name:', body.source_name);
+  // 🔍 EXTRA DEBUG: dump the full incoming payload for this test phase
+  try {
+    console.log('🧾 RAW BODY:', JSON.stringify(body, null, 2));
+  } catch (e) {
+    console.warn('⚠️ Could not stringify body:', e.message);
+  }
 
-  const tagsArray = (body.tags || '').split(',').map(tag => tag.trim()).filter(Boolean);
+  console.log('🚚 Order received:', body.id);
+  console.log('🏷️ Tags (raw):', body.tags);
+  console.log('🪪 Source Name (raw):', body.source_name);
+
+  const tagsArray = (body.tags || '')
+    .split(',')
+    .map(tag => tag.trim())
+    .filter(Boolean);
+
   const sourceName = body.source_name || '';
+
+  console.log('🔎 Parsed tagsArray:', tagsArray);
+  console.log('🔎 sourceName:', sourceName);
 
   // NEW: Check for Recharge indicators in line items
   const lineItems = Array.isArray(body.line_items) ? body.line_items : [];
@@ -42,6 +56,9 @@ export default async function handler(req, res) {
   );
   const hasSellingPlan = lineItems.some(item => item.selling_plan_allocation);
 
+  console.log('🔎 hasSubscriptionProps:', hasSubscriptionProps);
+  console.log('🔎 hasSellingPlan:', hasSellingPlan);
+
   const isRecurring = (
     tagsArray.includes('Subscription Recurring Order') ||
     sourceName === 'subscription_contract' ||
@@ -49,8 +66,16 @@ export default async function handler(req, res) {
     hasSellingPlan
   );
 
+  console.log('🤖 isRecurring evaluation:', {
+    isRecurring,
+    fromTag: tagsArray.includes('Subscription Recurring Order'),
+    fromSourceName: sourceName === 'subscription_contract',
+    fromProps: hasSubscriptionProps,
+    fromSellingPlan: hasSellingPlan,
+  });
+
   if (isRecurring) {
-    console.log(`❌ Skipping recurring subscription order: ${body.id}`);
+    console.log(`❌ Skipping recurring subscription order in webhook: ${body.id}`);
     return res.status(200).json({ success: false, message: 'Recurring order ignored' });
   }
 
@@ -120,11 +145,11 @@ export default async function handler(req, res) {
     fbc,
     ...(HAS_ADS_CONSENT && email   ? { em: [toSha256(email)] } : {}),
     ...(HAS_ADS_CONSENT && phone   ? { ph: [toSha256(phone)] } : {}),
-    ...(HAS_ADS_CONSENT && fn      ? { fn: [toSha256(fn)] }    : {}),
-    ...(HAS_ADS_CONSENT && ln      ? { ln: [toSha256(ln)] }    : {}),
-    ...(HAS_ADS_CONSENT && city    ? { ct: [toSha256(city)] }  : {}),
+    ...(HAS_ADS_CONSENT && fn      ? { fn: [toSha256(fn)]    } : {}),
+    ...(HAS_ADS_CONSENT && ln      ? { ln: [toSha256(ln)]    } : {}),
+    ...(HAS_ADS_CONSENT && city    ? { ct: [toSha256(city)]  } : {}),
     ...(HAS_ADS_CONSENT && state   ? { st: [toSha256(state)] } : {}),
-    ...(HAS_ADS_CONSENT && zip     ? { zp: [toSha256(zip)] }   : {}),
+    ...(HAS_ADS_CONSENT && zip     ? { zp: [toSha256(zip)]   } : {}),
     ...(HAS_ADS_CONSENT && country ? { country: [toSha256(country)] } : {}),
     ...(HAS_ADS_CONSENT            ? { external_id: [toSha256(String(customer.id || body.id))] } : {})
   };
