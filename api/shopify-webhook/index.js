@@ -10,12 +10,15 @@ export default async function handler(req, res) {
 
   try {
     const raw = JSON.stringify(req.body);
+    console.log('🧾 RAW BODY:', raw);
+
     const hmacHeader = req.headers['x-shopify-hmac-sha256'];
-    const digest = crypto.createHmac('sha256', process.env.SHOPIFY_WEBHOOK_SECRET)
+    const digest = crypto
+      .createHmac('sha256', process.env.SHOPIFY_WEBHOOK_SECRET)
       .update(raw, 'utf8')
       .digest('base64');
 
-    const ok = (digest === hmacHeader);
+    const ok = digest === hmacHeader;
     if (!ok) {
       const msg = '⚠️ HMAC mismatch (report-only)';
       if (ENFORCE_HMAC) return res.status(401).send('Invalid signature');
@@ -25,58 +28,62 @@ export default async function handler(req, res) {
     console.warn('⚠️ HMAC verify skipped:', e.message);
   }
 
-  const body = req.body;
-
-  // 🔍 EXTRA DEBUG: dump the full incoming payload for this test phase
-  try {
-    console.log('🧾 RAW BODY:', JSON.stringify(body, null, 2));
-  } catch (e) {
-    console.warn('⚠️ Could not stringify body:', e.message);
-  }
+  const body = req.body || {};
 
   console.log('🚚 Order received:', body.id);
   console.log('🏷️ Tags (raw):', body.tags);
   console.log('🪪 Source Name (raw):', body.source_name);
 
-  const tagsArray = (body.tags || '')
-    .split(',')
-    .map(tag => tag.trim())
-    .filter(Boolean);
+  const tagsArray =
+    (body.tags || '')
+      .split(',')
+      .map((tag) => tag.trim())
+      .filter(Boolean) || [];
 
   const sourceName = body.source_name || '';
 
+  // Check line items for subscription indicators
+  const lineItems = Array.isArray(body.line_items) ? body.line_items : [];
+
+  const hasSubscriptionProps = lineItems.some(
+    (item) =>
+      Array.isArray(item.properties) &&
+      item.properties.some((p) => p.name === '_recharge_subscription_id')
+  );
+
+  const hasSellingPlan = lineItems.some((item) => item.selling_plan_allocation);
+
+  // More robust recurring detection
+  const isRecurringFromTag = tagsArray.includes('Subscription Recurring Order');
+  const isRecurringFromSourceName =
+    typeof sourceName === 'string' &&
+    sourceName.toLowerCase().startsWith('subscription_contract');
+  const isRecurringFromProps = hasSubscriptionProps;
+  const isRecurringFromSellingPlan = hasSellingPlan;
+
+  const isRecurring =
+    isRecurringFromTag ||
+    isRecurringFromSourceName ||
+    isRecurringFromProps ||
+    isRecurringFromSellingPlan;
+
   console.log('🔎 Parsed tagsArray:', tagsArray);
   console.log('🔎 sourceName:', sourceName);
-
-  // NEW: Check for Recharge indicators in line items
-  const lineItems = Array.isArray(body.line_items) ? body.line_items : [];
-  const hasSubscriptionProps = lineItems.some(item =>
-    Array.isArray(item.properties) &&
-    item.properties.some(p => p.name === '_recharge_subscription_id')
-  );
-  const hasSellingPlan = lineItems.some(item => item.selling_plan_allocation);
-
   console.log('🔎 hasSubscriptionProps:', hasSubscriptionProps);
   console.log('🔎 hasSellingPlan:', hasSellingPlan);
-
-  const isRecurring = (
-    tagsArray.includes('Subscription Recurring Order') ||
-    sourceName === 'subscription_contract' ||
-    hasSubscriptionProps ||
-    hasSellingPlan
-  );
-
   console.log('🤖 isRecurring evaluation:', {
     isRecurring,
-    fromTag: tagsArray.includes('Subscription Recurring Order'),
-    fromSourceName: sourceName === 'subscription_contract',
-    fromProps: hasSubscriptionProps,
-    fromSellingPlan: hasSellingPlan,
+    fromTag: isRecurringFromTag,
+    fromSourceName: isRecurringFromSourceName,
+    fromProps: isRecurringFromProps,
+    fromSellingPlan: isRecurringFromSellingPlan,
   });
 
   if (isRecurring) {
-    console.log(`❌ Skipping recurring subscription order in webhook: ${body.id}`);
-    return res.status(200).json({ success: false, message: 'Recurring order ignored' });
+    console.log(`❌ Skipping recurring subscription order: ${body.id}`);
+    return res
+      .status(200)
+      .json({ success: false, message: 'Recurring order ignored' });
   }
 
   // ✅ Extract fbp/fbc from note_attributes or fallback proxy
@@ -93,7 +100,9 @@ export default async function handler(req, res) {
   const lookupKey = body.cart_token || body.browser_ip || null;
   if ((!fbp || !fbc) && lookupKey && process.env.PROXY_COOKIE_LOOKUP_URL) {
     try {
-      const url = `${process.env.PROXY_COOKIE_LOOKUP_URL}?key=${encodeURIComponent(lookupKey)}`;
+      const url = `${process.env.PROXY_COOKIE_LOOKUP_URL}?key=${encodeURIComponent(
+        lookupKey
+      )}`;
       const proxyRes = await fetch(url);
       if (proxyRes.ok) {
         const proxyData = await proxyRes.json();
@@ -116,26 +125,43 @@ export default async function handler(req, res) {
   const toSha256 = (v) => crypto.createHash('sha256').update(v).digest('hex');
   const lc = (s = '') => s.toString().trim().toLowerCase();
   const up = (s = '') => s.toString().trim().toUpperCase();
-  const cleanText = (s = '') => lc(s).normalize('NFKD').replace(/[^\w\s-]/g, '').replace(/\s+/g, ' ');
+  const cleanText = (s = '') =>
+    lc(s)
+      .normalize('NFKD')
+      .replace(/[^\w\s-]/g, '')
+      .replace(/\s+/g, ' ');
   const cleanPhone = (p, cc = '44') => {
     if (!p) return '';
     const d = String(p).replace(/\D+/g, '');
     return d.startsWith(cc) ? d : cc + d.replace(/^0+/, '');
   };
 
-  const email   = lc(customer.email || body.email || '');
-  const phone   = cleanPhone(customer.phone || bill.phone || ship.phone || '');
-  const fn      = cleanText(customer.first_name || bill.first_name || ship.first_name || '');
-  const ln      = cleanText(customer.last_name  || bill.last_name  || ship.last_name  || '');
-  const city    = cleanText(bill.city || ship.city || '');
-  const state   = up(bill.province_code || ship.province_code || '');
-  const zip     = (bill.zip || ship.zip || '').toString().trim();
+  const email = lc(customer.email || body.email || '');
+  const phone = cleanPhone(
+    customer.phone || bill.phone || ship.phone || ''
+  );
+  const fn = cleanText(
+    customer.first_name || bill.first_name || ship.first_name || ''
+  );
+  const ln = cleanText(
+    customer.last_name || bill.last_name || ship.last_name || ''
+  );
+  const city = cleanText(bill.city || ship.city || '');
+  const state = up(bill.province_code || ship.province_code || '');
+  const zip = (bill.zip || ship.zip || '').toString().trim();
   const country = up(bill.country_code || ship.country_code || '');
 
-  const clientIp = body.browser_ip || req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '0.0.0.0';
-  const userAgent = body.browser_user_agent || req.headers['user-agent'] || 'unknown';
+  const clientIp =
+    body.browser_ip ||
+    req.headers['x-forwarded-for'] ||
+    req.socket?.remoteAddress ||
+    '0.0.0.0';
+  const userAgent =
+    body.browser_user_agent || req.headers['user-agent'] || 'unknown';
 
-  const eventTime = Math.floor(new Date(body.created_at || Date.now()).getTime() / 1000);
+  const eventTime = Math.floor(
+    new Date(body.created_at || Date.now()).getTime() / 1000
+  );
   const eventId = `${body.id || body.order_number || 'order'}:${eventTime}`;
 
   const user_data = {
@@ -143,15 +169,17 @@ export default async function handler(req, res) {
     client_user_agent: userAgent,
     fbp,
     fbc,
-    ...(HAS_ADS_CONSENT && email   ? { em: [toSha256(email)] } : {}),
-    ...(HAS_ADS_CONSENT && phone   ? { ph: [toSha256(phone)] } : {}),
-    ...(HAS_ADS_CONSENT && fn      ? { fn: [toSha256(fn)]    } : {}),
-    ...(HAS_ADS_CONSENT && ln      ? { ln: [toSha256(ln)]    } : {}),
-    ...(HAS_ADS_CONSENT && city    ? { ct: [toSha256(city)]  } : {}),
-    ...(HAS_ADS_CONSENT && state   ? { st: [toSha256(state)] } : {}),
-    ...(HAS_ADS_CONSENT && zip     ? { zp: [toSha256(zip)]   } : {}),
+    ...(HAS_ADS_CONSENT && email ? { em: [toSha256(email)] } : {}),
+    ...(HAS_ADS_CONSENT && phone ? { ph: [toSha256(phone)] } : {}),
+    ...(HAS_ADS_CONSENT && fn ? { fn: [toSha256(fn)] } : {}),
+    ...(HAS_ADS_CONSENT && ln ? { ln: [toSha256(ln)] } : {}),
+    ...(HAS_ADS_CONSENT && city ? { ct: [toSha256(city)] } : {}),
+    ...(HAS_ADS_CONSENT && state ? { st: [toSha256(state)] } : {}),
+    ...(HAS_ADS_CONSENT && zip ? { zp: [toSha256(zip)] } : {}),
     ...(HAS_ADS_CONSENT && country ? { country: [toSha256(country)] } : {}),
-    ...(HAS_ADS_CONSENT            ? { external_id: [toSha256(String(customer.id || body.id))] } : {})
+    ...(HAS_ADS_CONSENT
+      ? { external_id: [toSha256(String(customer.id || body.id))] }
+      : {}),
   };
 
   const payload = {
@@ -191,7 +219,7 @@ export default async function handler(req, res) {
 
     console.log(`✅ Sent Aimerce_Target for order ${body.id}`, {
       matched: result.events_received,
-      fbtrace_id: result.fbtrace_id
+      fbtrace_id: result.fbtrace_id,
     });
     return res.status(200).json({ success: true, result });
   } catch (error) {
