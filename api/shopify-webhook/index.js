@@ -86,16 +86,23 @@ export default async function handler(req, res) {
       .json({ success: false, message: 'Recurring order ignored' });
   }
 
-  // ✅ Extract fbp/fbc from note_attributes or fallback proxy
-  let fbp = null;
-  let fbc = null;
+// ✅ Extract fbp/fbc from note_attributes (supports both new + legacy keys)
+let fbp = null;
+let fbc = null;
 
-  if (Array.isArray(body.note_attributes)) {
-    for (const item of body.note_attributes) {
-      if (item?.name === '_fbp') fbp = item.value;
-      if (item?.name === '_fbc') fbc = item.value;
-    }
+if (Array.isArray(body.note_attributes)) {
+  for (const item of body.note_attributes) {
+    if (!item?.name) continue;
+
+    // Prefer clean keys
+    if (item.name === 'fbp') fbp = item.value;
+    if (item.name === 'fbc') fbc = item.value;
+
+    // Fallback to legacy keys if needed
+    if (!fbp && item.name === '_fbp') fbp = item.value;
+    if (!fbc && item.name === '_fbc') fbc = item.value;
   }
+}
 
   const lookupKey = body.cart_token || body.browser_ip || null;
   if ((!fbp || !fbc) && lookupKey && process.env.PROXY_COOKIE_LOOKUP_URL) {
