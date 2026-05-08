@@ -91,21 +91,46 @@ export default async function handler(req, res) {
   // --------------------------------------------------
   // 2. First-order-only detection
   // --------------------------------------------------
+  // Important:
+  // Shopify may send customer.orders_count as 0 or 1 around the exact moment
+  // the first order webhook fires.
+  //
+  // So we allow 0 or 1, but only if a real Shopify customer record exists.
+  // Returning customers should usually show 2+ and will be skipped.
 
   const customer = body.customer || {};
-  const customerOrderCount = Number(customer.orders_count || 0);
 
-  const isFirstEligibleOrder = customerOrderCount === 1;
+  const hasCustomerRecord = Boolean(customer.id);
+
+  const customerOrderCountRaw = customer.orders_count;
+
+  const customerOrderCount =
+    customerOrderCountRaw === undefined || customerOrderCountRaw === null
+      ? null
+      : Number(customerOrderCountRaw);
+
+  const isFirstEligibleOrder =
+    hasCustomerRecord &&
+    customerOrderCount !== null &&
+    customerOrderCount <= 1;
 
   console.log('👤 Signal One eligibility:', {
-    order_id: body.id,
+    event_id: body.id,
     customer_id: customer.id || null,
+    customerOrderCountRaw,
     customerOrderCount,
+    hasCustomerRecord,
     isFirstEligibleOrder,
   });
 
   if (!isFirstEligibleOrder) {
-    console.log(`❌ Signal One skipped: not first eligible order ${body.id}`);
+    console.log(`❌ Signal One skipped: not first eligible order ${body.id}`, {
+      customer_id: customer.id || null,
+      customerOrderCountRaw,
+      customerOrderCount,
+      hasCustomerRecord,
+    });
+
     return res.status(200).json({
       success: false,
       message: 'Not first eligible order',
@@ -255,6 +280,16 @@ export default async function handler(req, res) {
     ],
   };
 
+  console.log('📦 Signal One payload prepared:', {
+    event_name: 'Aimerce_Signal_One',
+    event_time: eventTime,
+    event_id: eventId,
+    has_fbp: Boolean(fbp),
+    has_fbc: Boolean(fbc),
+    value: Number(body.total_price) || 0,
+    currency: body.currency || 'GBP',
+  });
+
   try {
     const response = await fetch(
       `https://graph.facebook.com/v18.0/${process.env.META_PIXEL_ID}/events?access_token=${process.env.META_ACCESS_TOKEN}`,
@@ -277,7 +312,7 @@ export default async function handler(req, res) {
     }
 
     console.log(`✅ Sent Aimerce_Signal_One`, {
-      order_id: body.id,
+      event_id: eventId,
       matched: result.events_received,
       fbtrace_id: result.fbtrace_id,
     });
