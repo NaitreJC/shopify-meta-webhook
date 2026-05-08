@@ -34,6 +34,8 @@ export default async function handler(req, res) {
   console.log('🏷️ Tags raw:', body.tags);
   console.log('🪪 Source Name raw:', body.source_name);
   console.log('👤 Customer orders_count:', body.customer?.orders_count);
+  console.log('👤 Customer created_at:', body.customer?.created_at);
+  console.log('🕒 Order created_at:', body.created_at);
 
   const tagsArray =
     (body.tags || '')
@@ -92,11 +94,15 @@ export default async function handler(req, res) {
   // 2. First-order-only detection
   // --------------------------------------------------
   // Important:
-  // Shopify may send customer.orders_count as 0 or 1 around the exact moment
-  // the first order webhook fires.
+  // Shopify may not include customer.orders_count in the order creation webhook.
   //
-  // So we allow 0 or 1, but only if a real Shopify customer record exists.
-  // Returning customers should usually show 2+ and will be skipped.
+  // Preferred signal:
+  // - customer.orders_count is 0 or 1
+  //
+  // Fallback signal:
+  // - customer.created_at is very close to order.created_at
+  //
+  // This avoids relying only on orders_count, which your payload has shown can be missing.
 
   const customer = body.customer || {};
 
@@ -109,10 +115,32 @@ export default async function handler(req, res) {
       ? null
       : Number(customerOrderCountRaw);
 
+  const orderCreatedAt = body.created_at
+    ? new Date(body.created_at).getTime()
+    : null;
+
+  const customerCreatedAt = customer.created_at
+    ? new Date(customer.created_at).getTime()
+    : null;
+
+  const minutesBetweenCustomerAndOrder =
+    orderCreatedAt && customerCreatedAt
+      ? Math.abs(orderCreatedAt - customerCreatedAt) / 1000 / 60
+      : null;
+
+  // Direct signal if Shopify provides orders_count.
+  const isFirstByOrderCount =
+    customerOrderCount !== null && customerOrderCount <= 1;
+
+  // Fallback if Shopify does not provide orders_count.
+  // For a genuinely new customer, the customer record is usually created very close to the order.
+  const isFirstByCustomerCreatedAt =
+    customerOrderCount === null &&
+    minutesBetweenCustomerAndOrder !== null &&
+    minutesBetweenCustomerAndOrder <= 30;
+
   const isFirstEligibleOrder =
-    hasCustomerRecord &&
-    customerOrderCount !== null &&
-    customerOrderCount <= 1;
+    hasCustomerRecord && (isFirstByOrderCount || isFirstByCustomerCreatedAt);
 
   console.log('👤 Signal One eligibility:', {
     event_id: body.id,
@@ -120,6 +148,11 @@ export default async function handler(req, res) {
     customerOrderCountRaw,
     customerOrderCount,
     hasCustomerRecord,
+    orderCreatedAt: body.created_at || null,
+    customerCreatedAt: customer.created_at || null,
+    minutesBetweenCustomerAndOrder,
+    isFirstByOrderCount,
+    isFirstByCustomerCreatedAt,
     isFirstEligibleOrder,
   });
 
@@ -129,6 +162,9 @@ export default async function handler(req, res) {
       customerOrderCountRaw,
       customerOrderCount,
       hasCustomerRecord,
+      orderCreatedAt: body.created_at || null,
+      customerCreatedAt: customer.created_at || null,
+      minutesBetweenCustomerAndOrder,
     });
 
     return res.status(200).json({
